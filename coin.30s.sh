@@ -26,8 +26,37 @@ format_number() {
     fi
 }
 
-# List of coin drivers to load
-COIN_DRIVERS=("gopax_gxa.sh" "upbit_btc.sh")
+CONFIG_FILE="$SCRIPT_DIR/.config"
+if [ -f "$CONFIG_FILE" ]; then
+    source "$CONFIG_FILE"
+else
+    echo "❌ Config Error"
+    echo "---"
+    echo "Config file not found: $CONFIG_FILE"
+    echo "Please create config file with SECRET variable"
+    echo "---"
+    echo "Create Config | bash='touch $CONFIG_FILE && echo \"SECRET=\\\"your-secret-here\\\"\" > $CONFIG_FILE' terminal=false"
+    exit 1
+fi
+
+# 키 생성
+gen_key() {
+    echo -n "${SECRET}$(date +%Y%m%d%H)" | sha256sum | cut -c1-16
+}
+
+# 키 검증 (10분 유효)
+check_key() {
+    local key="$1"
+    local current=$(gen_key)
+    local previous=$(echo -n "${SECRET}$(date -d '1 hour ago' +%Y%m%d%H)" | sha256sum | cut -c1-16)
+
+    [[ "$key" == "$current" ]] && return 0
+    [[ $(date +%M) -lt 10 && "$key" == "$previous" ]] && return 0
+    return 1
+}
+
+# List of coin drivers to load (쉼표 제거!)
+COIN_DRIVERS=("gopax_gxa.sh" "upbit_btc.sh" "upbit_eth.sh" "upbit_sol.sh")
 
 main_symbol=""
 main_price=""
@@ -35,7 +64,22 @@ dropdown_output=""
 previous_exchange=""
 
 for driver in "${COIN_DRIVERS[@]}"; do
+    # 파일 존재 여부 확인
+    if [ ! -f "$SCRIPT_DIR/helpers/coins/$driver" ]; then
+        echo "Warning: $driver not found" >&2
+        continue
+    fi
+
+    # 소스 로드 전에 함수 초기화
+    unset -f get_price get_symbol get_exchange get_link
+
     source "$SCRIPT_DIR/helpers/coins/$driver"
+
+    # 함수 존재 여부 확인
+    if ! declare -f get_price > /dev/null; then
+        echo "Warning: get_price function not found in $driver" >&2
+        continue
+    fi
 
     price=$(get_price)
     full_symbol=$(get_symbol)
@@ -47,7 +91,7 @@ for driver in "${COIN_DRIVERS[@]}"; do
         main_price=$price
     fi
 
-    if [[ "$price" == "Error:"*  ]]; then
+    if [[ "$price" == "Error:"* ]]; then
         current_output="$full_symbol: Error ($exchange)"
     else
         current_output="$full_symbol: $(format_number $price) ($exchange)"
@@ -58,7 +102,11 @@ for driver in "${COIN_DRIVERS[@]}"; do
     fi
 
     dropdown_output+="$current_output\n"
-    dropdown_output+="$(get_link)\n"
+
+    # get_link 함수 존재 여부 확인
+    if declare -f get_link > /dev/null; then
+        dropdown_output+="$(get_link)\n"
+    fi
 
     previous_exchange=$exchange
 done
@@ -74,6 +122,12 @@ echo "---"
 echo -e "$dropdown_output"
 echo "---"
 echo "Last Updated: $(date +"%H:%M:%S")"
+
+echo "---"
+# 현재 키 표시 및 클립보드 복사 기능
+
+current_key=$(gen_key)
+echo "🔑 Key: $current_key | bash='$SCRIPT_DIR/helpers/copy_key.sh' param1='$current_key' terminal=false"
 
 echo "---"
 echo "Refresh | refresh=true"
